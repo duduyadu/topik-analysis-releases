@@ -1,7 +1,10 @@
 name: TOPIK license signer
-run-name: TOPIK license request ${{ inputs.request_id }}
+run-name: ${{ github.event_name == 'schedule' && 'TOPIK automatic license renewal' || format('TOPIK license request {0}', inputs.request_id) }}
 
 on:
+  schedule:
+    # Every Monday at 03:17 KST (Sunday 18:17 UTC), away from the busy hour boundary.
+    - cron: '17 18 * * 0'
   workflow_dispatch:
     inputs:
       request_id:
