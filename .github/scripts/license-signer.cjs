@@ -64,8 +64,9 @@ function validateRequest(request){
   if(withId&&!validId(request.licenseId))fail();
   return request;
 }
-function authorize(context){
-  if(context.actorId!==OWNER_ID||context.ownerId!==OWNER_ID||context.repository!==REPOSITORY||context.ref!=='refs/heads/main'||context.eventName!=='workflow_dispatch')fail('Licensing operation not authorized');
+function authorize(context,request){
+  const allowedEvent=context.eventName==='workflow_dispatch'||(context.eventName==='schedule'&&request?.operation==='renew');
+  if(context.actorId!==OWNER_ID||context.ownerId!==OWNER_ID||context.repository!==REPOSITORY||context.ref!=='refs/heads/main'||!allowedEvent)fail('Licensing operation not authorized');
 }
 function buildMutation({registry,request,privateKey,now=Date.now()}){
   validateRequest(request);if(!integer(now))fail();
@@ -118,7 +119,7 @@ async function readDocument(api,path,head,limit=MAX_BYTES){
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
 }
 async function publishRequest(options){
-  authorize(options);const request=validateRequest(options.request),key=authority(options.privateKey),api=options.api;
+  authorize(options,options.request);const request=validateRequest(options.request),key=authority(options.privateKey),api=options.api;
   const resultPath=`licensing/results/${request.requestId}.json`;
   for(let attempt=0;attempt<4;attempt++){
     const head=gitSha((await api('GET','/git/ref/heads/main')).object?.sha);
@@ -151,12 +152,20 @@ function githubAPI(token,fetcher=fetch){
     finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
   };
 }
+function requestFromEnvironment(env){
+  if(env.GITHUB_EVENT_NAME==='schedule'){
+    if(!/^[1-9][0-9]{0,24}$/.test(env.GITHUB_RUN_ID||''))fail('Missing scheduled run ID');
+    const digest=createHash('sha256').update(`${REPOSITORY}:renew:${env.GITHUB_RUN_ID}`).digest('hex');
+    return {requestId:`${digest.slice(0,8)}-${digest.slice(8,12)}-4${digest.slice(13,16)}-8${digest.slice(17,20)}-${digest.slice(20,32)}`,operation:'renew'};
+  }
+  return {requestId:env.REQUEST_ID,operation:env.OPERATION,...(env.REQUEST_CODE?{requestCode:env.REQUEST_CODE}:{}),...(env.LICENSE_ID?{licenseId:env.LICENSE_ID}:{})};
+}
 async function main(env=process.env){
-  const request={requestId:env.REQUEST_ID,operation:env.OPERATION,...(env.REQUEST_CODE?{requestCode:env.REQUEST_CODE}:{}),...(env.LICENSE_ID?{licenseId:env.LICENSE_ID}:{})};
+  const request=requestFromEnvironment(env);
   const context={actorId:env.GITHUB_ACTOR_ID,ownerId:env.REPOSITORY_OWNER_ID,repository:env.GITHUB_REPOSITORY,ref:env.GITHUB_REF,eventName:env.GITHUB_EVENT_NAME};
-  authorize(context);
+  authorize(context,request);
   await publishRequest({...context,request,privateKey:env.TOPIK_LICENSE_SIGNING_KEY,api:githubAPI(env.GITHUB_TOKEN)});
   process.stdout.write('License request published successfully.\n');
 }
-module.exports={buildMutation,publishRequest,githubAPI,main};
+module.exports={buildMutation,publishRequest,githubAPI,requestFromEnvironment,main};
 if(require.main===module)main().catch(()=>{process.stderr.write('License request failed. No credentials or private keys were logged.\n');process.exitCode=1;});
