@@ -1,0 +1,55 @@
+name: TOPIK license signer
+run-name: TOPIK license request ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique request UUID
+        required: true
+        type: string
+      operation:
+        description: Owner-authorized license operation
+        required: true
+        type: choice
+        options: [register-admin, approve, replace, suspend, renew]
+      request_code:
+        description: Public device registration code, when required
+        required: false
+        type: string
+      license_id:
+        description: Existing license identifier, when required
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: topik-license-registry
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  sign:
+    if: github.actor_id == '220458712' && github.event.repository.owner.id == 220458712 && github.repository == 'duduyadu/topik-analysis-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout owner-controlled signer
+        # actions/checkout v7.0.1, verified against the official release commit.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Sign and publish the requested change
+        run: node .github/scripts/license-signer.cjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TOPIK_LICENSE_SIGNING_KEY: ${{ secrets.TOPIK_LICENSE_SIGNING_KEY }}
+          REPOSITORY_OWNER_ID: ${{ github.event.repository.owner.id }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          OPERATION: ${{ inputs.operation }}
+          REQUEST_CODE: ${{ inputs.request_code }}
+          LICENSE_ID: ${{ inputs.license_id }}
